@@ -1,4 +1,3 @@
-// ADDED systemPreferences TO THIS LIST
 const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, session, systemPreferences } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
@@ -7,7 +6,6 @@ const isDev = !app.isPackaged;
 let win;
 let tray;
 
-// Auto-update config
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
@@ -28,41 +26,41 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: isDev,
-      backgroundThrottling: false 
+      devTools: isDev
     }
   });
 
-  // Automatically allow permissions
+  win.setContentProtection(true);
+
+  // --- PERMISSION HANDLERS (CRITICAL FOR MIC) ---
+  
+  // 1. Force Electron to approve audio/media requests
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const allowedPermissions = ['media', 'audioCapture', 'desktopCapture'];
+    const allowedPermissions = ['media', 'audio-capture', 'display-capture'];
     if (allowedPermissions.includes(permission)) {
-      callback(true);
+      callback(true); // Approve automatically
     } else {
       callback(false);
     }
   });
 
-  win.setContentProtection(true); 
-
-  if (isDev) {
-    win.loadURL('http://localhost:5173');
-  } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'));
+  // 2. Explicitly check/ask for macOS Microphone access
+  if (process.platform === 'darwin') {
+    const status = systemPreferences.getMediaAccessStatus('microphone');
+    if (status === 'not-determined') {
+      systemPreferences.askForMediaAccess('microphone');
+    }
   }
+
+  if (isDev) win.loadURL('http://localhost:5173');
+  else win.loadFile(path.join(__dirname, '../dist/index.html'));
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
-    toggleWindow();
-  });
-
-  win.once('ready-to-show', () => {
-    if (!isDev) autoUpdater.checkForUpdatesAndNotify();
-  });
+  globalShortcut.register('CommandOrControl+Shift+Space', () => toggleWindow());
 }
 
 // --- TRAY ICON ---
@@ -71,7 +69,6 @@ function createTray() {
   const buffer = Buffer.alloc(size * size * 4);
   const center = size / 2;
 
-  // Draw "Prism" Icon
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const dist = Math.abs(x - center) + Math.abs(y - center);
@@ -120,15 +117,5 @@ ipcMain.handle('get-screen-capture', async () => {
   }
 });
 
-app.whenReady().then(async () => {
-  createWindow();
-  createTray();
-  
-  // Explicitly ask for mic access on macOS
-  if (process.platform === 'darwin') {
-    const status = await systemPreferences.askForMediaAccess('microphone');
-    console.log('Microphone access:', status);
-  }
-});
-
+app.whenReady().then(() => { createWindow(); createTray(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
