@@ -1,10 +1,22 @@
 {
   "name": "spectre-ai",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.2",
   "main": "electron/main.js",
   "description": "The Invisible AI Copilot",
   "author": "BryanParreira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BryanParreira/spectre.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "release": "npm run electron:build -- --publish always"
+  },
   "build": {
     "appId": "com.spectre.app",
     "productName": "Spectre",
@@ -33,14 +45,6 @@
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": true
     }
-  },
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder",
-    "release": "npm run electron:build -- --publish always"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
