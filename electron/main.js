@@ -5,6 +5,10 @@ const { autoUpdater } = require('electron-updater');
 const isDev = !app.isPackaged;
 let win;
 
+// --- UPDATE CONFIG ---
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
 // Optimization flags
 app.commandLine.appendSwitch('disable-gpu-process-crash-limit');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -31,7 +35,7 @@ function createWindow() {
     frame: false,
     resizable: false,
     movable: false,
-    skipTaskbar: true, // Hides from Dock/Taskbar as well (true Ghost mode)
+    skipTaskbar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -56,7 +60,6 @@ function createWindow() {
 
   session.defaultSession.setPermissionRequestHandler((_, perm, callback) => callback(true));
   
-  // Toggle Shortcut
   globalShortcut.register('CommandOrControl+Shift+G', () => {
     if (win.isVisible()) { win.hide(); } else { win.show(); win.webContents.send('app-woke-up'); }
   });
@@ -68,13 +71,14 @@ ipcMain.handle('proxy-request', async (event, { url, method, headers, body }) =>
   return new Promise((resolve, reject) => {
     const request = net.request({ url, method });
     Object.keys(headers).forEach(key => request.setHeader(key, headers[key]));
-    
     request.on('response', (response) => {
       let data = '';
       response.on('data', (chunk) => data += chunk);
-      response.on('end', () => resolve({ status: response.statusCode, data: JSON.parse(data) }));
+      response.on('end', () => {
+        try { resolve({ status: response.statusCode, data: JSON.parse(data) }); } 
+        catch { resolve({ status: response.statusCode, data: {} }); }
+      });
     });
-    
     request.on('error', (error) => reject(error));
     if (body) request.write(JSON.stringify(body));
     request.end();
@@ -94,7 +98,7 @@ ipcMain.handle('quit-app', () => app.quit());
 ipcMain.handle('get-screen-capture', async () => {
   const originalOpacity = win.getOpacity();
   win.setOpacity(0);
-  await new Promise(r => setTimeout(r, 150)); 
+  await new Promise(r => setTimeout(r, 150));
   try {
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
     win.setOpacity(1);
@@ -105,18 +109,25 @@ ipcMain.handle('get-screen-capture', async () => {
   }
 });
 
-// Updates
+// --- UPDATE EVENTS ---
 ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
-ipcMain.handle('download-update', () => autoUpdater.downloadUpdate());
 ipcMain.handle('quit-and-install', () => autoUpdater.quitAndInstall());
-autoUpdater.on('update-available', (info) => win && win.webContents.send('update-msg', { status: 'available', version: info.version }));
-autoUpdater.on('download-progress', (p) => win && win.webContents.send('update-msg', { status: 'downloading', percent: p.percent }));
-autoUpdater.on('update-downloaded', () => win && win.webContents.send('update-msg', { status: 'ready' }));
+
+autoUpdater.on('update-available', () => {
+  if(win) win.webContents.send('update-msg', { status: 'available' });
+});
+autoUpdater.on('download-progress', (progress) => {
+  if(win) win.webContents.send('update-msg', { status: 'downloading', percent: progress.percent });
+});
+autoUpdater.on('update-downloaded', () => {
+  if(win) win.webContents.send('update-msg', { status: 'ready' });
+});
 
 app.whenReady().then(async () => {
   await checkMacPermissions();
   createWindow();
-  // No Tray Created
+  // Check for updates immediately on startup
+  if (!isDev) autoUpdater.checkForUpdatesAndNotify(); 
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
