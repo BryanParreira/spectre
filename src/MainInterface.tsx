@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   Mic, MicOff, Settings, X, GripHorizontal, 
-  Camera, Send, Eye, EyeOff, Power, Cpu, Terminal
+  Camera, Send, Eye, EyeOff, Power, Cpu, Terminal, RefreshCw, Download, AlertCircle, CheckCircle
 } from 'lucide-react';
 import { MarkdownMessage } from './MarkdownMessage';
 import './index.css';
@@ -53,6 +53,9 @@ const MainInterface = () => {
   const [showChat, setShowChat] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   
+  // Update State
+  const [updateStatus, setUpdateStatus] = useState({ status: 'idle', percent: 0, error: null });
+
   const [config, setConfig] = useState({
     provider: localStorage.getItem('provider') || 'ollama',
     apiKey: localStorage.getItem('apiKey') || '',
@@ -66,6 +69,17 @@ const MainInterface = () => {
     window.electronAPI.setIgnoreMouse(true);
     if (config.provider === 'ollama') fetchOllamaModels();
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+    // Update Listener
+    window.electronAPI.onUpdateMsg((msg) => {
+      console.log("Update Msg:", msg);
+      if (msg.status === 'available') setUpdateStatus({ status: 'available', percent: 0 });
+      if (msg.status === 'downloading') setUpdateStatus({ status: 'downloading', percent: Math.round(msg.percent) });
+      if (msg.status === 'ready') setUpdateStatus({ status: 'ready', percent: 100 });
+      if (msg.status === 'uptodate') setUpdateStatus({ status: 'uptodate', percent: 0 });
+      if (msg.status === 'error') setUpdateStatus({ status: 'error', error: msg.error });
+    });
+
   }, [messages, config.provider]);
 
   const fetchOllamaModels = async () => {
@@ -86,6 +100,15 @@ const MainInterface = () => {
     localStorage.setItem('model', config.model);
     localStorage.setItem('systemContext', config.systemContext);
     setShowSettings(false);
+  };
+
+  const checkForUpdates = () => {
+    setUpdateStatus({ status: 'checking', percent: 0 });
+    window.electronAPI.checkForUpdates();
+  };
+
+  const quitAndInstall = () => {
+    window.electronAPI.quitAndInstall();
   };
 
   const handleCapture = async () => {
@@ -189,6 +212,50 @@ const MainInterface = () => {
                   }
                 </div>
                 <div className="setting-section"><div className="section-title"><Terminal size={12}/> Persona</div><textarea className="setting-input area" value={config.systemContext} onChange={e => setConfig({...config, systemContext: e.target.value})} /></div>
+                
+                {/* --- UPDATE SECTION --- */}
+                <div className="setting-section" style={{marginTop: 'auto', marginBottom: '10px', background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px'}}>
+                  <div className="section-title" style={{marginBottom:'5px'}}><RefreshCw size={12}/> Updates</div>
+                  
+                  {updateStatus.status === 'idle' && (
+                    <button className="setting-input" onClick={checkForUpdates} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer'}}>
+                      <RefreshCw size={14}/> Check for Updates
+                    </button>
+                  )}
+
+                  {updateStatus.status === 'checking' && (
+                    <div style={{fontSize:'12px', color:'#aaa', textAlign:'center', padding:'5px'}}>Checking...</div>
+                  )}
+
+                  {updateStatus.status === 'available' && (
+                    <div style={{fontSize:'12px', color:'#3b82f6', textAlign:'center', padding:'5px'}}>Update found! Downloading...</div>
+                  )}
+
+                  {updateStatus.status === 'downloading' && (
+                    <div style={{width:'100%', background:'rgba(255,255,255,0.1)', height:'6px', borderRadius:'3px', overflow:'hidden'}}>
+                      <div style={{width: `${updateStatus.percent}%`, background:'#3b82f6', height:'100%'}} />
+                    </div>
+                  )}
+
+                  {updateStatus.status === 'ready' && (
+                    <button className="setting-input" onClick={quitAndInstall} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer', background:'rgba(34, 197, 94, 0.2)', color:'#4ade80'}}>
+                      <Download size={14}/> Restart & Install
+                    </button>
+                  )}
+
+                  {updateStatus.status === 'uptodate' && (
+                    <div style={{fontSize:'12px', color:'#4ade80', textAlign:'center', padding:'5px', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px'}}>
+                      <CheckCircle size={14}/> Aura is up to date
+                    </div>
+                  )}
+
+                  {updateStatus.status === 'error' && (
+                    <div style={{fontSize:'11px', color:'#ef4444', textAlign:'center', padding:'5px'}}>
+                      Error: {updateStatus.error}
+                    </div>
+                  )}
+                </div>
+
                 <button className="save-btn" onClick={saveSettings}>Save</button>
               </div>
             ) : (

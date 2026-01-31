@@ -122,11 +122,17 @@ autoUpdater.on('download-progress', (progress) => {
 autoUpdater.on('update-downloaded', () => {
   if(win) win.webContents.send('update-msg', { status: 'ready' });
 });
+autoUpdater.on('update-not-available', () => {
+  if(win) win.webContents.send('update-msg', { status: 'uptodate' });
+});
+autoUpdater.on('error', (err) => {
+  if(win) win.webContents.send('update-msg', { status: 'error', error: err.message });
+});
 
 app.whenReady().then(async () => {
   await checkMacPermissions();
   createWindow();
-  // Check for updates immediately on startup
+  // Check for updates immediately on startup if not in dev
   if (!isDev) autoUpdater.checkForUpdatesAndNotify(); 
 });
 

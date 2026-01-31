@@ -1,13 +1,24 @@
 {
   "name": "aura-ai",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1",
   "main": "electron/main.js",
   "description": "The Invisible AI Overlay",
   "author": "BryanParreira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bryanparreira/aura"
+  },
   "build": {
     "appId": "com.aura.app",
     "productName": "Aura",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "bryanparreira",
+        "repo": "aura"
+      }
+    ],
     "directories": {
       "output": "dist-electron",
       "buildResources": "build"

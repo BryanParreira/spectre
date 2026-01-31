@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
-  onAppWokeUp: (callback) => ipcRenderer.on('app-woke-up', () => callback())
+  onAppWokeUp: (callback) => ipcRenderer.on('app-woke-up', () => callback()),
+  onUpdateMsg: (callback) => ipcRenderer.on('update-msg', (_event, value) => callback(value))
 });
