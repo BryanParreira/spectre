@@ -3,9 +3,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   captureScreen: () => ipcRenderer.invoke('get-screen-capture'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
-  
   setIgnoreMouse: (ignore) => ipcRenderer.invoke('set-ignore-mouse', ignore),
   setUndetectable: (state) => ipcRenderer.invoke('set-undetectable', state),
-
+  proxyRequest: (options) => ipcRenderer.invoke('proxy-request', options),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
+  onUpdateMsg: (callback) => ipcRenderer.on('update-msg', (_event, value) => callback(value)),
   onAppWokeUp: (callback) => ipcRenderer.on('app-woke-up', () => callback())
 });
