@@ -1,70 +1,47 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, screen, session } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Tray, Menu, nativeImage, screen, session, systemPreferences } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
 let win;
 let tray;
-let pythonProcess = null;
 
-// --- PYTHON SIDECAR MANAGEMENT ---
-function startPythonServer() {
-  const scriptPath = path.join(__dirname, '../backend/server.py');
-  
-  // In production, you would bundle the python executable. 
-  // For dev, we assume 'python' or 'python3' is in PATH.
-  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-  
-  pythonProcess = spawn(pythonCmd, [scriptPath]);
-
-  pythonProcess.stdout.on('data', (data) => {
-    console.log(`[Python Brain]: ${data}`);
-  });
-
-  pythonProcess.stderr.on('data', (data) => {
-    console.error(`[Python Error]: ${data}`);
-  });
-
-  pythonProcess.on('close', (code) => {
-    console.log(`Python process exited with code ${code}`);
-  });
-}
-
-function stopPythonServer() {
-  if (pythonProcess) {
-    pythonProcess.kill();
-    pythonProcess = null;
+async function checkMacPermissions() {
+  if (process.platform === 'darwin') {
+    const status = systemPreferences.getMediaAccessStatus('microphone');
+    if (status === 'not-determined') await systemPreferences.askForMediaAccess('microphone');
   }
 }
 
-// --- WINDOW MANAGEMENT ---
 function createWindow() {
-  const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 800,
-    height: 600,
-    minHeight: 60, // For HUD
-    x: 100, y: 100,
+    width: width,
+    height: height,
+    x: 0, y: 0,
+    type: 'panel', // Keeps it floating above other apps
+    enableLargerThanScreen: true,
+    hasShadow: false, // Critical: Remove window shadow so "invisible" areas don't show
     alwaysOnTop: true,
-    transparent: true,
+    transparent: true, // Critical: Allows CSS to handle transparency
     frame: false,
-    hasShadow: false,
-    resizable: true,
-    vibrancy: 'fullscreen-ui',
-    visualEffectState: 'active',
+    resizable: false,
+    movable: false,
     skipTaskbar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       devTools: isDev,
-      webSecurity: false // Often needed for local media/server fetch in dev
+      webSecurity: true,
+      backgroundThrottling: false
     }
   });
 
-  win.setContentProtection(true);
+  // Default: Ghost Mode (Click through the empty space)
+  win.setIgnoreMouseEvents(true, { forward: true });
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   if (isDev) win.loadURL('http://localhost:5173');
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -74,54 +51,58 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // Global Toggle
+  session.defaultSession.setPermissionRequestHandler((_, perm, callback) => callback(true));
+  
   globalShortcut.register('CommandOrControl+Shift+G', () => {
-    if (win.isVisible() && win.isFocused()) {
-      win.hide();
-    } else {
-      win.show();
-      win.focus();
-      win.webContents.send('app-woke-up');
-    }
+    if (win.isVisible()) win.hide(); else { win.show(); win.webContents.send('app-woke-up'); }
   });
 }
 
 // --- IPC HANDLERS ---
+
+// 1. Mouse Passthrough (Allows clicking desktop behind the app)
+ipcMain.handle('set-ignore-mouse', (event, ignore) => {
+  if (win) {
+    win.setIgnoreMouseEvents(ignore, { forward: true });
+  }
+});
+
+// 2. Undetectability
+ipcMain.handle('set-undetectable', (event, state) => {
+  if (win) win.setContentProtection(state);
+});
+
+// 3. System
+ipcMain.handle('quit-app', () => app.quit());
 ipcMain.handle('get-screen-capture', async () => {
-  const originalOpacity = win.getOpacity();
+  const wasVisible = win.isVisible();
   win.setOpacity(0);
-  await new Promise(r => setTimeout(r, 200));
+  await new Promise(r => setTimeout(r, 150));
   try {
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
-    win.setOpacity(originalOpacity);
+    win.setOpacity(1);
     return sources[0].thumbnail.toDataURL();
   } catch (e) {
-    win.setOpacity(originalOpacity);
+    win.setOpacity(1);
     throw e;
   }
 });
 
-ipcMain.handle('set-window-size', (event, width, height) => { if (win) win.setSize(width, height, true); });
-ipcMain.handle('set-ignore-mouse', (event, ignore, options) => { if (win) win.setIgnoreMouseEvents(ignore, options); });
-ipcMain.handle('quit-app', () => app.quit());
-
-// --- LIFECYCLE ---
-app.whenReady().then(() => {
-  startPythonServer(); // <--- START BRAIN
-  createWindow();
+function createTray() {
+  const size = 16;
+  const buffer = Buffer.alloc(size * size * 4);
+  buffer.fill(255); 
+  const icon = nativeImage.createFromBitmap(buffer, { width: size, height: size });
   
-  // Tray Setup
-  const icon = nativeImage.createEmpty(); // Placeholder, use real icon in prod
   tray = new Tray(icon);
-  tray.setToolTip('Spectre AI (Local)');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Quit', click: () => app.quit() }
-  ]));
-});
+  tray.setToolTip('Spectre');
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Quit', click: () => app.quit() }]));
+}
 
-app.on('will-quit', () => {
-  stopPythonServer(); // <--- KILL BRAIN
-  globalShortcut.unregisterAll();
+app.whenReady().then(async () => {
+  await checkMacPermissions();
+  createWindow();
+  createTray();
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
