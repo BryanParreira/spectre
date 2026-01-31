@@ -1,7 +1,7 @@
 {
   "name": "spectre-ai",
   "private": true,
-  "version": "1.1.7",
+  "version": "1.1.8",
   "main": "electron/main.js",
   "description": "The Invisible AI Copilot",
   "author": "BryanParreira",

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
-import { Eye, ArrowUp, Settings, X, Power, Sparkles, MessageSquare, Zap, Activity, Download, Cloud } from 'lucide-react';
+import { Eye, ArrowUp, Settings, X, Power, Sparkles, MessageSquare, Zap, Activity, AlertCircle, Cloud } from 'lucide-react';
 import './index.css';
 
 const MainInterface = () => {
@@ -31,25 +31,19 @@ const MainInterface = () => {
   const [ollamaModels, setOllamaModels] = useState([]);
 
   // REFS
-  const recognitionRef = useRef(null);
-  const audioContextRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const isLiveRef = useRef(false);
   const liveIntervalRef = useRef(null);
+  const audioIntervalRef = useRef(null);
   const chatEndRef = useRef(null);
-  
-  // Temporary storage for current sentence to prevent flickering
-  const currentInterimRef = useRef(""); 
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
 
   // INITIALIZATION
   useEffect(() => {
-    if (window.electronAPI?.onUpdateMsg) {
-      window.electronAPI.onUpdateMsg((msg) => setUpdateState(msg));
-    }
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      setAudioDevices(devices.filter(d => d.kind === 'audioinput'));
-    });
+    if (window.electronAPI?.onUpdateMsg) window.electronAPI.onUpdateMsg((msg) => setUpdateState(msg));
+    navigator.mediaDevices.enumerateDevices().then(devices => setAudioDevices(devices.filter(d => d.kind === 'audioinput')));
     if (config.provider === 'ollama') fetchOllamaModels();
     return () => stopEverything();
   }, []);
@@ -58,12 +52,15 @@ const MainInterface = () => {
     isLiveRef.current = false;
     setIsLiveMode(false);
     setVolumeLevel(0);
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.stop();
-    }
+    
+    // Stop Screen Watcher
     if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
-    if (audioContextRef.current) audioContextRef.current.close();
+    
+    // Stop Audio Recorder
+    if (audioIntervalRef.current) clearInterval(audioIntervalRef.current);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
   };
 
   const toggleLiveMode = () => {
@@ -71,33 +68,38 @@ const MainInterface = () => {
       stopEverything();
       addMessage("Live mode stopped.", 'ai');
     } else {
+      if (config.provider === 'ollama') {
+        addMessage("⚠️ Live Dictation requires Groq or OpenAI. Please switch providers in Settings.", 'ai');
+        setShowSettings(true);
+        return;
+      }
       isLiveRef.current = true;
       setIsLiveMode(true);
-      addMessage("Live Mode Active. Listening...", 'ai');
+      addMessage("Live Mode Active. Listening (Whisper Engine)...", 'ai');
       
-      // 1. Start Screen Analysis
+      // 1. Screen Analysis (Every 5s)
       handleCapture(true);
       liveIntervalRef.current = setInterval(() => handleCapture(true), 5000);
       
-      // 2. Start Audio
-      startAudioListener();
+      // 2. Start Audio Engine
+      startWhisperEngine();
     }
   };
 
-  const startAudioListener = async () => {
-    // --- 1. VISUALIZER (To verify mic is working) ---
+  // --- NEW WHISPER ENGINE (UNBREAKABLE) ---
+  const startWhisperEngine = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { deviceId: selectedAudioDevice !== 'default' ? { exact: selectedAudioDevice } : undefined } 
       });
+
+      // A. Visualizer
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
       analyser.fftSize = 256;
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      audioContextRef.current = audioContext;
-      
       const updateVol = () => {
         if (!isLiveRef.current) return;
         analyser.getByteFrequencyData(dataArray);
@@ -106,80 +108,75 @@ const MainInterface = () => {
         requestAnimationFrame(updateVol);
       };
       updateVol();
-    } catch (e) { 
-      console.error("Visualizer Error:", e);
-      // Don't stop dictation even if visualizer fails
-    }
 
-    // --- 2. INSTANT DICTATION ---
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addMessage("Error: Speech API not found. Please ensure you are online.", 'ai');
-      return;
-    }
+      // B. Recorder
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true; // KEY FIX: Show text AS you speak
-    recognition.lang = 'en-US';
-    
-    recognition.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
 
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
-      }
-
-      // Logic to append text smoothly
-      if (finalTranscript || interimTranscript) {
-        setInput(prev => {
-          // We only want to append the NEW final part to the state
-          // The interim part is tricky because it changes constantly
-          // For simplicity in this React setup, we append final immediately
-          
-          if (finalTranscript) {
-             const spacing = (prev.length > 0 && !prev.endsWith(' ')) ? ' ' : '';
-             return prev + spacing + finalTranscript;
-          }
-          return prev; // Ignore interim updates to state to prevent jitter, OR:
-        });
+      recorder.onstop = async () => {
+        if (!isLiveRef.current || audioChunksRef.current.length === 0) return;
         
-        // OPTIONAL: If you want to see gray text (interim) inside the input
-        // You would need a separate UI element. For now, let's just force Final.
-        // NOTE: If you are seeing NOTHING, it's because sentences aren't finalizing.
-        // Let's force interim into the console to debug.
-        if (interimTranscript) console.log("Interim:", interimTranscript);
-      }
-    };
+        // Convert to Blob
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        audioChunksRef.current = []; // Reset
+        
+        // Transcribe
+        if (audioBlob.size > 2000) { // Only send if we actually recorded something
+          await transcribeAudio(audioBlob);
+        }
+        
+        // Restart if still live
+        if (isLiveRef.current) recorder.start();
+      };
 
-    // DEBUGGING ERRORS
-    recognition.onerror = (event) => {
-      console.warn("Speech Error:", event.error);
-      if (event.error === 'not-allowed') {
-         setIsLiveMode(false);
-         addMessage("Microphone permission denied. Check Mac System Settings.", 'ai');
-      } else if (event.error === 'network') {
-         addMessage("Network error: Dictation requires internet connection.", 'ai');
-      }
-    };
+      // Loop: Stop & Send every 4 seconds
+      recorder.start();
+      audioIntervalRef.current = setInterval(() => {
+        if (recorder.state === 'recording') recorder.stop();
+      }, 4000); // 4 Second Chunks
 
-    recognition.onend = () => {
-      if (isLiveRef.current) {
-        console.log("Restarting listener...");
-        try { recognition.start(); } catch (e) {}
-      }
-    };
-
-    try {
-      recognition.start();
-      recognitionRef.current = recognition;
     } catch (e) {
-      console.error("Failed to start recognition:", e);
+      console.error("Audio Error:", e);
+      addMessage("Could not access microphone.", 'ai');
+      setIsLiveMode(false);
+    }
+  };
+
+  const transcribeAudio = async (audioBlob) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.webm');
+      formData.append('model', config.provider === 'groq' ? 'distil-whisper-large-v3-en' : 'whisper-1');
+
+      let url = '';
+      let headers = {};
+
+      if (config.provider === 'groq') {
+        url = 'https://api.groq.com/openai/v1/audio/transcriptions';
+        headers['Authorization'] = `Bearer ${config.apiKey}`;
+      } else if (config.provider === 'openai') {
+        url = 'https://api.openai.com/v1/audio/transcriptions';
+        headers['Authorization'] = `Bearer ${config.apiKey}`;
+      } else {
+        return; // Ollama doesn't support audio yet
+      }
+
+      const res = await fetch(url, { method: 'POST', headers, body: formData });
+      const data = await res.json();
+
+      if (data.text && data.text.trim().length > 0) {
+        setInput(prev => {
+          const spacing = (prev.length > 0 && !prev.endsWith(' ')) ? ' ' : '';
+          return prev + spacing + data.text.trim();
+        });
+      }
+    } catch (e) {
+      console.error("Transcription Failed:", e);
     }
   };
 
@@ -204,9 +201,7 @@ const MainInterface = () => {
 
   const handleSendText = async () => {
     if (!input.trim() || isLoading) return;
-    const txt = input; 
-    setInput(""); 
-    addMessage(txt, "user");
+    const txt = input; setInput(""); addMessage(txt, "user");
     await callAI(txt, null);
   };
 
@@ -218,7 +213,6 @@ const MainInterface = () => {
       const base64 = dataURL.split(',')[1];
       const prompt = input || (silent ? "Briefly list major changes." : "What is on this screen?");
       if (!silent) setInput("");
-      
       await callAI(prompt, base64, silent);
     } catch (e) { if (!silent) addMessage(`Error: ${e.message}`, 'ai'); }
   };
@@ -228,7 +222,6 @@ const MainInterface = () => {
     try {
       const finalPrompt = config.systemContext ? `CONTEXT: ${config.systemContext}\n\nQUESTION: ${prompt}` : prompt;
       let url = '', body = {}, headers = { 'Content-Type': 'application/json' };
-      
       if (config.provider === 'ollama') {
         url = 'http://localhost:11434/api/generate';
         body = { model: config.model, prompt: finalPrompt, stream: false, images: imageBase64 ? [imageBase64] : undefined };
@@ -239,7 +232,6 @@ const MainInterface = () => {
         if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
         body = { model: config.model, messages: [{ role: "user", content }] };
       }
-
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json();
       const reply = config.provider === 'ollama' ? data.response : data.choices[0].message.content;
@@ -254,7 +246,6 @@ const MainInterface = () => {
       <div className="header-drag-area"></div>
       <button className="settings-trigger" onClick={() => setShowSettings(true)}><Settings size={20} /></button>
 
-      {/* CHAT AREA */}
       <div className="chat-area">
         {messages.map((msg) => (
           <div key={msg.id} className={`message ${msg.sender}`}><div dangerouslySetInnerHTML={{ __html: msg.text }} /></div>
@@ -263,7 +254,6 @@ const MainInterface = () => {
         <div ref={chatEndRef} />
       </div>
 
-      {/* INPUT AREA */}
       <div className="input-section">
         <div className="suggestions">
           <button className={`chip ${isLiveMode ? 'active' : ''}`} onClick={toggleLiveMode}>
@@ -274,22 +264,12 @@ const MainInterface = () => {
         </div>
         <div className="input-wrapper">
           {isLiveMode && <div style={{ position: 'absolute', bottom: 0, left: 0, height: '3px', width: `${Math.min(volumeLevel * 2, 100)}%`, background: '#22c55e', transition: 'width 0.05s ease', opacity: 0.8 }} />}
-          
           <button className="action-btn" onClick={() => handleCapture(false)}><Eye size={20} /></button>
-          
-          <input 
-            className="input-field" 
-            placeholder={isLiveMode ? "Listening..." : "Ask Spectre..."} 
-            value={input} 
-            onChange={(e) => setInput(e.target.value)} 
-            onKeyDown={(e) => e.key === 'Enter' && handleSendText()} 
-          />
-          
+          <input className="input-field" placeholder={isLiveMode ? "Listening..." : "Ask Spectre..."} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendText()} />
           <button className={`action-btn ${input ? 'active' : ''}`} onClick={handleSendText}><ArrowUp size={20} /></button>
         </div>
       </div>
 
-      {/* SETTINGS HUB */}
       {showSettings && (
         <div className="settings-overlay">
           <div style={{display:'flex', justifyContent:'space-between', padding:'20px 20px 0'}}>
@@ -307,7 +287,7 @@ const MainInterface = () => {
                 <div className="setting-box">
                   <div className="setting-section-title" style={{padding:'8px 12px 0'}}>Audio Input</div>
                   <div className="setting-row">
-                    <div className="setting-text"><h4>Microphone Source</h4><p>Choose listening device.</p></div>
+                    <div className="setting-text"><h4>Microphone Source</h4><p>Choose device.</p></div>
                     <select className="styled-select" value={selectedAudioDevice} onChange={(e) => setSelectedAudioDevice(e.target.value)}>
                       <option value="default">Default System</option>
                       {audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label.substring(0,25)}...</option>)}
