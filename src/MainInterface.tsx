@@ -1,8 +1,9 @@
 // @ts-nocheck
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Mic, MicOff, Settings, X, GripHorizontal, 
-  Camera, Send, Eye, EyeOff, Power, Cpu, Terminal, RefreshCw, Download, AlertCircle, CheckCircle
+  Camera, Send, Eye, EyeOff, Power, Cpu, Terminal, 
+  RefreshCw, Download, AlertCircle, CheckCircle, Square, Trash2
 } from 'lucide-react';
 import { MarkdownMessage } from './MarkdownMessage';
 import './index.css';
@@ -46,7 +47,12 @@ const Draggable = ({ children, initialPos }) => {
 };
 
 const MainInterface = () => {
-  const [messages, setMessages] = useState([{ id: 1, text: "Welcome to Aura", sender: 'ai' }]);
+  // 1. IMPROVEMENT: Load initial state from LocalStorage (Persistence)
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem('aura_history');
+    return saved ? JSON.parse(saved) : [{ id: 1, text: "Welcome to Aura", sender: 'ai' }];
+  });
+  
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLive, setIsLive] = useState(false);
@@ -64,6 +70,14 @@ const MainInterface = () => {
   });
   const [ollamaModels, setOllamaModels] = useState([]);
   const chatEndRef = useRef(null);
+  
+  // 2. IMPROVEMENT: Stop Generating Capability
+  const abortController = useRef(null);
+
+  // 3. IMPROVEMENT: Persist Chat History
+  useEffect(() => {
+    localStorage.setItem('aura_history', JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     window.electronAPI.setIgnoreMouse(true);
@@ -127,41 +141,143 @@ const MainInterface = () => {
     callAI(input);
   };
 
+  const handleStop = () => {
+    if (abortController.current) {
+      abortController.current.abort();
+      abortController.current = null;
+    }
+    setIsLoading(false);
+  };
+
+  const clearHistory = () => {
+    setMessages([{ id: 1, text: "Welcome to Aura", sender: 'ai' }]);
+  };
+
+  // 4. IMPROVEMENT: Context-Aware AI Call
   const callAI = async (prompt, img = null) => {
+    // Stop previous request if active
+    if (abortController.current) abortController.current.abort();
+    abortController.current = new AbortController();
+
     setIsLoading(true);
     try {
-      const { provider, apiKey, model } = config;
+      const { provider, apiKey, model, systemContext } = config;
       let responseText = "";
       const imageBase64 = img ? img.split(',')[1] : null;
 
+      // Prepare History (Last 10 messages to maintain context window)
+      const history = messages.slice(-10).map(m => ({
+        role: m.sender === 'ai' ? 'assistant' : 'user',
+        content: m.text
+      }));
+
+      // Add System Prompt
+      const fullMessages = [
+        { role: 'system', content: systemContext || DEFAULT_SYSTEM },
+        ...history
+      ];
+
       if (provider === 'ollama') {
+        // Construct Ollama payload
+        const newMessage = { role: 'user', content: prompt };
+        if (imageBase64) newMessage.images = [imageBase64];
+        
         const res = await window.electronAPI.proxyRequest({
           url: 'http://localhost:11434/api/chat',
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: { model: model || 'llama3', messages: [{role:'user', content: prompt, images: imageBase64 ? [imageBase64] : undefined}], stream: false }
+          body: { 
+            model: model || 'llama3', 
+            messages: [...fullMessages, newMessage], 
+            stream: false 
+          }
         });
-        responseText = res.data.message.content;
+        
+        if (abortController.current?.signal.aborted) return;
+        responseText = res.data.message?.content || "No response from Ollama.";
       } 
       else if (provider === 'openai') {
+        // Construct OpenAI payload
         const content = [{ type: "text", text: prompt }];
         if (imageBase64) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } });
+        
         const res = await window.electronAPI.proxyRequest({
           url: 'https://api.openai.com/v1/chat/completions',
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          body: { model: model || 'gpt-4o', messages: [{role: 'user', content}] }
+          body: { 
+            model: model || 'gpt-4o', 
+            messages: [...fullMessages, { role: 'user', content }] 
+          }
         });
-        responseText = res.data.choices[0].message.content;
+
+        if (abortController.current?.signal.aborted) return;
+        responseText = res.data.choices?.[0]?.message?.content || "No response from OpenAI.";
       }
 
       setMessages(p => [...p, { id: Date.now(), text: responseText, sender: 'ai' }]);
     } catch (e) {
-      setMessages(p => [...p, { id: Date.now(), text: "Connection error.", sender: 'ai' }]);
+      if (!abortController.current?.signal.aborted) {
+        setMessages(p => [...p, { id: Date.now(), text: `Error: ${e.message || "Connection failed"}`, sender: 'ai' }]);
+      }
     } finally {
       setIsLoading(false);
+      abortController.current = null;
     }
   };
+
+  // 5. IMPROVEMENT: Real Voice Integration
+  // Use a ref to access the latest callAI function without triggering re-renders
+  const callAIRef = useRef(callAI);
+  useEffect(() => { callAIRef.current = callAI; });
+
+  useEffect(() => {
+    let recognition = null;
+
+    if (isLive) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false; // Capture one sentence at a time
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => console.log("Voice listening started...");
+        
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          if (transcript.trim()) {
+            setInput(transcript); // Show what was heard
+            // Auto-send logic
+            setMessages(p => [...p, { id: Date.now(), text: transcript, sender: 'user' }]);
+            callAIRef.current(transcript);
+          }
+        };
+
+        recognition.onerror = (e) => {
+          console.error("Speech error:", e.error);
+          // If not-allowed, turn off live mode
+          if (e.error === 'not-allowed') setIsLive(false);
+        };
+
+        recognition.onend = () => {
+          // Restart immediately to simulate continuous listening if still live
+          if (isLive) {
+            try { recognition.start(); } catch (e) {}
+          }
+        };
+
+        try { recognition.start(); } catch (e) {}
+      } else {
+        alert("Speech Recognition not supported in this environment.");
+        setIsLive(false);
+      }
+    }
+
+    return () => {
+      if (recognition) recognition.stop();
+    };
+  }, [isLive]);
 
   return (
     <div className="invisible-canvas">
@@ -204,6 +320,12 @@ const MainInterface = () => {
             {showSettings ? (
               <div className="settings-panel no-drag">
                 <div className="setting-header"><span>Config</span><button className="icon-btn" onClick={() => setShowSettings(false)}><X size={16}/></button></div>
+                
+                {/* Clear History Button added here */}
+                <button className="setting-input" onClick={clearHistory} style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'6px', cursor:'pointer', marginBottom:'10px', color: '#ff79c6'}}>
+                  <Trash2 size={14}/> Clear Conversation History
+                </button>
+
                 <div className="setting-section"><div className="section-title"><Cpu size={12}/> Brain</div>
                   <div className="setting-row"><select className="setting-input" value={config.provider} onChange={e => setConfig({...config, provider: e.target.value})}><option value="ollama">Ollama (Local)</option><option value="openai">OpenAI</option></select></div>
                   {config.provider === 'ollama' ? 
@@ -284,7 +406,17 @@ const MainInterface = () => {
                 <div className="input-area no-drag">
                   <div className="input-glass">
                     <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} placeholder="Ask Aura..." />
-                    <button className="icon-btn" onClick={handleSend}><Send size={14}/></button>
+                    
+                    {/* Send / Stop Toggle */}
+                    {isLoading ? (
+                      <button className="icon-btn" onClick={handleStop} title="Stop Generating">
+                        <Square size={14} fill="currentColor" />
+                      </button>
+                    ) : (
+                      <button className="icon-btn" onClick={handleSend} title="Send">
+                        <Send size={14}/>
+                      </button>
+                    )}
                   </div>
                 </div>
               </>
