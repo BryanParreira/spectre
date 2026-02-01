@@ -1,7 +1,7 @@
 {
   "name": "aura-ai",
   "private": true,
-  "version": "2.0.2",
+  "version": "2.0.3",
   "main": "electron/main.js",
   "description": "The Invisible AI Overlay",
   "author": "BryanParreira",
@@ -23,10 +23,16 @@
       "output": "dist-electron",
       "buildResources": "build"
     },
-    "files": [ "dist/**/*", "electron/**/*" ],
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
     "mac": {
       "icon": "build/icon.icns",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "extendInfo": {
@@ -44,7 +50,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder"
+    "electron:build": "npm run build && electron-builder",
+    "release": "npm run build && electron-builder --publish always"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
