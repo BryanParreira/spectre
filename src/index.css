@@ -80,10 +80,24 @@ body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .input-glass input { background: transparent; border: none; color: white; flex: 1; font-size: 14px; outline: none; }
 
 /* SETTINGS */
-.settings-panel { padding: 20px; display: flex; flex-direction: column; gap: 20px; color: #eee; height: 100%; }
+.settings-panel { 
+  padding: 20px; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 20px; 
+  color: #eee; 
+  height: 100%; 
+  overflow-y: auto; /* Enable scrolling */
+  scrollbar-width: none; /* Hide scrollbar Firefox */
+  box-sizing: border-box; /* Fixes padding issue hiding the save button */
+}
+.settings-panel::-webkit-scrollbar { 
+  display: none; /* Hide scrollbar Chrome/Safari */ 
+}
+
 .setting-header { display: flex; justify-content: space-between; font-weight: 600; font-size: 16px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
 .setting-section-title { font-size: 11px; font-weight: 700; color: var(--aurora-3); text-transform: uppercase; margin-bottom: 8px; }
 .setting-row { margin-bottom: 10px; }
 .setting-input { width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); padding: 10px; border-radius: 8px; color: white; outline: none; font-size: 13px; }
 .setting-input.area { height: 80px; resize: none; }
-.save-btn { background: white; color: black; font-weight: 600; padding: 12px; border-radius: 10px; border: none; cursor: pointer; margin-top: auto; }
+.save-btn { background: white; color: black; font-weight: 600; padding: 12px; border-radius: 10px; border: none; cursor: pointer; margin-top: auto; flex-shrink: 0; }
