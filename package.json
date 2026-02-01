@@ -12,13 +12,6 @@
   "build": {
     "appId": "com.aura.app",
     "productName": "Aura",
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "bryanparreira",
-        "repo": "aura"
-      }
-    ],
     "directories": {
       "output": "dist-electron",
       "buildResources": "build"
@@ -26,6 +19,13 @@
     "files": [
       "dist/**/*",
       "electron/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "bryanparreira",
+        "repo": "aura"
+      }
     ],
     "mac": {
       "target": [
@@ -37,12 +37,12 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "notarize": {
-        "teamId": "${APPLE_TEAM_ID}"
-      },
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Aura needs mic access.",
-        "NSScreenCaptureUsageDescription": "Aura needs screen access."
+        "NSMicrophoneUsageDescription": "Aura needs microphone access to listen to your commands.",
+        "NSScreenCaptureUsageDescription": "Aura needs screen recording permissions to see your screen context."
+      },
+      "notarize": {
+        "teamId": "5PNLAR99PK"
       }
     },
     "dmg": {
