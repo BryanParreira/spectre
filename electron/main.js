@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Menu, Tray, screen, session, systemPreferences, net } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, globalShortcut, shell, Menu, Tray, screen, session, systemPreferences, net, nativeImage } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
@@ -21,28 +21,55 @@ async function checkMacPermissions() {
   }
 }
 
-function createTray() {
-  const iconPath = process.platform === 'win32' 
-    ? path.join(__dirname, '../build/icon.ico') 
-    : path.join(__dirname, '../build/icons/16x16.png');
+function getIconPath() {
+  let iconPath;
+  if (isDev) {
+    // In development, look in the local build folder
+    iconPath = process.platform === 'win32' 
+      ? path.join(__dirname, '../build/icon.ico') 
+      : path.join(__dirname, '../build/icons/16x16.png');
+  } else {
+    // In production, look in resources (you must ensure icon is copied there or exists)
+    // Fallback to searching in the app bundle if extraResources isn't set up
+    iconPath = process.platform === 'win32'
+      ? path.join(process.resourcesPath, 'icon.ico')
+      : path.join(process.resourcesPath, 'icon.png');
+      
+    // Backup: try using the app root if resources path fails
+    if (!require('fs').existsSync(iconPath)) {
+        iconPath = path.join(app.getAppPath(), 'build/icon.ico');
+    }
+  }
+  return iconPath;
+}
 
+function createTray() {
+  const iconPath = getIconPath();
+  
   try {
-    tray = new Tray(iconPath);
+    const icon = nativeImage.createFromPath(iconPath);
+    tray = new Tray(icon);
+    
     const contextMenu = Menu.buildFromTemplate([
       { label: 'Show Aura', click: () => { win.show(); win.webContents.send('app-woke-up'); } },
       { label: 'Hide Aura', click: () => win.hide() },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() }
     ]);
+    
     tray.setToolTip('Aura');
     tray.setContextMenu(contextMenu);
     
     tray.on('click', () => {
-      if (win.isVisible()) win.hide();
-      else { win.show(); win.webContents.send('app-woke-up'); }
+      if (win.isVisible()) {
+          win.hide();
+      } else { 
+          win.show(); 
+          win.webContents.send('app-woke-up'); 
+      }
     });
   } catch (e) {
-    console.log("Tray icon could not be loaded, continuing without tray.");
+    console.log("Tray icon could not be loaded:", e);
   }
 }
 
@@ -61,7 +88,7 @@ function createWindow() {
     frame: false,
     resizable: false,
     movable: false,
-    skipTaskbar: true,
+    skipTaskbar: true, // Default hidden from taskbar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -76,6 +103,12 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setContentProtection(true);
 
+  // --- SAFETY NET: Force interaction when focused ---
+  // This ensures if you click the taskbar icon, the app becomes clickable
+  win.on('focus', () => {
+    win.setIgnoreMouseEvents(false);
+  });
+
   if (isDev) win.loadURL('http://localhost:5173');
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
 
@@ -87,15 +120,27 @@ function createWindow() {
   session.defaultSession.setPermissionRequestHandler((_, perm, callback) => callback(true));
   
   globalShortcut.register('CommandOrControl+Shift+G', () => {
-    if (win.isVisible()) { win.hide(); } else { win.show(); win.webContents.send('app-woke-up'); }
+    if (win.isVisible()) { 
+        win.hide(); 
+    } else { 
+        win.show(); 
+        win.setSkipTaskbar(false); // Ensure it's findable when woken
+        win.focus();
+        win.webContents.send('app-woke-up'); 
+    }
   });
 }
 
 // --- IPC HANDLERS ---
 
-// NEW: Toggle Always on Top
+// UPDATED: Toggle Always on Top AND Taskbar Visibility
 ipcMain.handle('toggle-always-on-top', (event, flag) => {
-  if (win) win.setAlwaysOnTop(flag, 'screen-saver');
+  if (win) {
+    win.setAlwaysOnTop(flag, 'screen-saver');
+    // If we UNPIN (flag is false), SHOW in taskbar so user can find it.
+    // If we PIN (flag is true), HIDE from taskbar to stay invisible.
+    win.setSkipTaskbar(flag); 
+  }
 });
 
 ipcMain.handle('proxy-request', async (event, { url, method, headers, body }) => {
