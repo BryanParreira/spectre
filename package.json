@@ -1,7 +1,7 @@
 {
   "name": "aura-ai",
   "private": true,
-  "version": "2.0.14",
+  "version": "2.0.15",
   "main": "electron/main.js",
   "description": "The Invisible AI Overlay",
   "author": "BryanParreira",
@@ -42,7 +42,7 @@
         "NSScreenCaptureUsageDescription": "Aura needs screen recording permissions to see your screen context."
       },
       "notarize": {
-        "teamId": "5PNLAR99PK"
+        "teamId": "${env.APPLE_TEAM_ID}"
       }
     },
     "dmg": {
